@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "node download-certificates.js",
+    "start-manual": "node download-certificates-manual.js",
     "setup-drive": "node setup-google-drive.js"
   },
   "keywords": [
