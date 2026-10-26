@@ -26,6 +26,9 @@ export async function authorize(credentialsPath) {
   
   if (fs.existsSync(TOKEN_PATH)) {
     const token = JSON.parse(fs.readFileSync(TOKEN_PATH, 'utf8'));
+    if (!token.access_token && !token.refresh_token) {
+      throw new Error('token.json tidak valid (tidak berisi access_token / refresh_token). Silakan jalankan: npm run setup-drive');
+    }
     oAuth2Client.setCredentials(token);
     return oAuth2Client;
   }
@@ -102,11 +105,23 @@ export async function setupAuth(credentialsPath) {
  * Store token after OAuth callback
  */
 export async function storeToken(oAuth2Client, code) {
-  const { tokens } = await oAuth2Client.getToken(code);
+  let cleanCode = (code || '').trim();
+  if (cleanCode.includes('code=')) {
+    try {
+      const urlObj = new URL(cleanCode.startsWith('http') ? cleanCode : `http://localhost/${cleanCode}`);
+      cleanCode = urlObj.searchParams.get('code') || cleanCode;
+    } catch (_) {
+      const match = cleanCode.match(/[?&]code=([^&]+)/);
+      if (match) cleanCode = match[1];
+    }
+  }
+  cleanCode = decodeURIComponent(cleanCode);
+
+  const { tokens } = await oAuth2Client.getToken(cleanCode);
   oAuth2Client.setCredentials(tokens);
   
   const TOKEN_PATH = path.join(__dirname, 'token.json');
-  fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokens));
+  fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokens, null, 2));
   
   return tokens;
 }

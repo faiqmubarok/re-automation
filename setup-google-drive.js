@@ -37,18 +37,25 @@ async function setup() {
   try {
     const { oAuth2Client, authUrl } = await setupAuth(credentialsPath);
     
-    console.log('📋 Step 1: Open this URL in your browser:\n');
+    console.log('📋 Langkah 1: Buka URL ini di browser:\n');
     console.log(authUrl);
-    console.log('\n');
+    console.log('\n------------------------------------------------------------');
+    console.log('💡 TIPS:');
+    console.log('1. Login dengan akun Google dan klik "Continue" / "Lanjutkan".');
+    console.log('2. Browser akan diarahkan ke http://localhost/?code=...');
+    console.log('3. Jika muncul "This site can’t be reached" di browser, itu NORMAL!');
+    console.log('4. Cukup COPY seluruh URL dari address bar browser (atau kode setelah code=),');
+    console.log('   lalu PASTE di bawah ini.');
+    console.log('------------------------------------------------------------\n');
     
-    const code = await question('📥 Step 2: Paste the authorization code here: ');
+    const code = await question('📥 Langkah 2: Paste kode otorisasi atau URL lengkap dari browser: ');
     
     console.log('\n⏳ Verifying and storing token...');
     await storeToken(oAuth2Client, code);
     
     console.log('✅ Authentication successful!');
     console.log('✅ token.json has been created');
-    console.log('\n🎉 Setup complete! You can now run: npm run start\n');
+    console.log('\n🎉 Setup complete! You can now run: npm run start-manual\n');
     
   } catch (error) {
     console.error('❌ Error during setup:', error.message);

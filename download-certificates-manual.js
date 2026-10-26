@@ -27,13 +27,35 @@ if (!fs.existsSync(DOWNLOAD_DIR)) {
 }
 
 /**
- * Login as admin
+ * Login as admin (with retry logic for connection issues)
  */
 async function loginAsAdmin(page) {
   console.log('🔐 Logging in as admin...');
-  await page.goto(LOGIN_URL);
-  await page.waitForLoadState('networkidle');
+
+  // Retry navigation in case of ERR_CONNECTION_CLOSED or chrome-error state
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      break;
+    } catch (e) {
+      console.log(`   ⚠️  Login page navigation attempt ${attempt}/3 failed: ${e.message.split('\n')[0]}`);
+      if (attempt < 3) {
+        await page.waitForTimeout(3000);
+      } else {
+        throw e;
+      }
+    }
+  }
+
+  await page.waitForLoadState('networkidle').catch(() => {});
   await page.waitForTimeout(1000);
+
+  // Check if we're actually on the login page (might already be logged in)
+  const hasLoginForm = await page.locator('#username').count();
+  if (hasLoginForm === 0) {
+    console.log('✅ Already logged in as admin');
+    return;
+  }
 
   await page.fill('#username', USERNAME);
   await page.fill('#password', PASSWORD);
@@ -45,80 +67,43 @@ async function loginAsAdmin(page) {
 
 /**
  * Return to admin account after "Log in as" student
- * The "Return to my normal account" link is inside a dropdown menu (hidden)
- * So we extract the href and navigate directly instead of clicking
+ * 
+ * Debug findings:
+ * - loginas.php ends the impersonation and redirects to /login/index.php (session destroyed)
+ * - The login page has "Log in as a guest" and "Log in" buttons
+ * - We must NOT click any buttons on the login page (old code was clicking "Log in as a guest"!)
+ * - Sometimes loginas.php causes ERR_CONNECTION_CLOSED
+ * - Solution: just navigate to loginas.php (ignore errors), then always re-login
  */
 async function returnToAdmin(page) {
   console.log('🔄 Returning to admin account...');
 
-  // Method 1: Extract href from the link and navigate directly (bypass dropdown visibility issue)
+  // Step 1: End the impersonation via loginas.php
+  // This will destroy the session and redirect to login page
+  // ERR_CONNECTION_CLOSED can happen here - that's fine, session is still ended
   try {
     const returnLink = page.locator('a[href*="loginas.php"]').first();
     if (await returnLink.count() > 0) {
       const href = await returnLink.getAttribute('href');
       if (href) {
-        console.log(`   📍 Navigating to: ${href}`);
-        await page.goto(href);
-        await page.waitForLoadState('networkidle');
-        await page.waitForTimeout(1000);
-
-        // Handle confirmation page if it exists
-        const continueBtn = page.locator('input[type="submit"][value="Continue"], button:has-text("Continue")').first();
-        if (await continueBtn.count() > 0) {
-          console.log('   ✅ Clicking confirmation button...');
-          await continueBtn.click();
-          await page.waitForLoadState('networkidle');
-          await page.waitForTimeout(1000);
+        console.log(`   📍 Ending impersonation: ${href}`);
+        try {
+          await page.goto(href, { waitUntil: 'domcontentloaded', timeout: 15000 });
+        } catch (navError) {
+          // ERR_CONNECTION_CLOSED is common here - the impersonation is still ended
+          console.log(`   ⚠️  Navigation hiccup (expected): ${navError.message.split('\n')[0]}`);
         }
-
-        console.log('✅ Back to admin account');
-        return;
+        await page.waitForTimeout(2000);
       }
     }
   } catch (e) {
-    console.log(`   ⚠️  Direct navigation failed: ${e.message}`);
+    console.log(`   ⚠️  Could not find return link: ${e.message.split('\n')[0]}`);
   }
 
-  // Method 2: Open the user dropdown menu first, then click the link
-  try {
-    // Click on user menu to expand it
-    const userMenu = page.locator('#user-menu, .usermenu, [aria-label*="user"], .dropdown-toggle, [data-toggle="dropdown"]').first();
-    if (await userMenu.count() > 0) {
-      await userMenu.click();
-      await page.waitForTimeout(500);
-
-      const returnLink2 = page.locator('a:has-text("Return to my normal account"), a[href*="loginas.php"]').first();
-      if (await returnLink2.count() > 0) {
-        await returnLink2.click();
-        await page.waitForLoadState('networkidle');
-        await page.waitForTimeout(1000);
-        console.log('✅ Back to admin account');
-        return;
-      }
-    }
-  } catch (e) {
-    console.log(`   ⚠️  Dropdown method failed: ${e.message}`);
-  }
-
-  // Method 3: Regular logout + re-login
-  console.log('⚠️  "Return to normal account" not found, trying logout + login...');
-  try {
-    // Navigate to logout URL directly
-    const logoutUrl = await page.evaluate(() => {
-      const link = document.querySelector('a[href*="login/logout.php"]');
-      return link ? link.href : null;
-    });
-
-    if (logoutUrl) {
-      await page.goto(logoutUrl);
-      await page.waitForLoadState('networkidle');
-      await page.waitForTimeout(1000);
-    }
-
-    await loginAsAdmin(page);
-  } catch (e) {
-    console.log(`   ⚠️  Logout + login failed: ${e.message}`);
-  }
+  // Step 2: Always re-login as admin (session is destroyed after loginas.php)
+  // Do NOT click any buttons on the current page - it's the login page with "Log in as a guest"!
+  console.log('   🔐 Re-logging in as admin...');
+  await loginAsAdmin(page);
 }
 
 /**
@@ -160,26 +145,6 @@ async function goToParticipantsAndSearch(page, studentName) {
   if (await studentLink.count() > 0) {
     console.log(`   ✅ Found student, opening profile...`);
     await studentLink.click();
-    await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(1500);
-    return;
-  }
-
-  // Step 5: Try first name only
-  const firstName = studentName.split(' ')[0];
-  console.log(`   🔍 Trying first name only: ${firstName}`);
-  if (await searchInput.count() > 0) {
-    await searchInput.fill('');
-    await searchInput.fill(firstName);
-    await searchInput.press('Enter');
-    await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(3000);
-  }
-
-  const studentLink2 = page.locator(`a:has-text("${firstName}")`).first();
-  if (await studentLink2.count() > 0) {
-    console.log(`   ✅ Found by first name, opening profile...`);
-    await studentLink2.click();
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(1500);
     return;
